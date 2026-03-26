@@ -23,5 +23,4 @@ service = "echo-engine-runtime"
 binding = "SHARED_BRAIN"
 service = "echo-shared-brain"
 
-[vars]
-ECHO_API_KEY = ""
+# ECHO_API_KEY set via: echo "KEY" | npx wrangler secret put ECHO_API_KEY
