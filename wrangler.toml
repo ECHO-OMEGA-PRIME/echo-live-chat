@@ -1,0 +1,27 @@
+name = "echo-live-chat"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+crons = ["0 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "echo-live-chat"
+database_id = "1173c3b3-7b2d-4a15-b202-7a5c93ed19c1"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "54bb41cfa8c0490db2a7be0c1006688e"
+
+[[services]]
+binding = "ENGINE_RUNTIME"
+service = "echo-engine-runtime"
+
+[[services]]
+binding = "SHARED_BRAIN"
+service = "echo-shared-brain"
+
+[vars]
+ECHO_API_KEY = ""
