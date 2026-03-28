@@ -464,7 +464,7 @@ async function handleVisitorAPI(req: Request, env: Env, path: string, method: st
           const aiMid = uid();
           await env.DB.prepare('INSERT INTO messages (id, conversation_id, tenant_id, sender_type, sender_name, content, ai_generated) VALUES (?, ?, ?, ?, ?, ?, 1)').bind(aiMid, cid, tid, 'bot', 'AI Assistant', aiReply).run();
         }
-      } catch { /* AI fallback failed silently */ }
+      } catch (e) { console.warn(JSON.stringify({ ts: new Date().toISOString(), level: 'warn', worker: 'echo-live-chat', message: 'AI auto-reply fallback failed', error: (e as Error)?.message })); }
     }
 
     return json({ ok: true, message_id: mid, ai_reply: aiReply });
