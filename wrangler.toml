@@ -24,3 +24,7 @@ binding = "SHARED_BRAIN"
 service = "echo-shared-brain"
 
 # ECHO_API_KEY set via: echo "KEY" | npx wrangler secret put ECHO_API_KEY
+
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "echo_metrics"
