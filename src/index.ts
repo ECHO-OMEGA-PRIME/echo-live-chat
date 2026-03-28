@@ -331,7 +331,10 @@ export default {
           const resp = await env.ENGINE_RUNTIME.fetch('https://engine/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine_id: 'GEN-01', query: `You are a customer support agent. Suggest a helpful reply to this customer message: "${sanitize(String(b.message || ''), 1000)}". Context: ${sanitize(String(b.context || ''), 2000)}. Keep the reply professional, concise, and helpful.` }) });
           const data = await resp.json() as Record<string, unknown>;
           return json({ ok: true, suggestion: data.answer || data.response || 'I would be happy to help you with that.' });
-        } catch { return json({ ok: true, suggestion: 'Thank you for reaching out. Let me look into this for you.' }); }
+        } catch (e) {
+          console.error('ai_suggest_reply failed:', e instanceof Error ? e.message : e);
+          return json({ ok: true, suggestion: 'Thank you for reaching out. Let me look into this for you.' });
+        }
       }
       if (path === '/ai/auto-tag' && method === 'POST') {
         const b = await req.json() as Record<string, unknown>;
@@ -341,7 +344,10 @@ export default {
           const answer = String(data.answer || data.response || '[]');
           const match = answer.match(/\[.*?\]/s);
           return json({ ok: true, tags: match ? JSON.parse(match[0]) : ['support'] });
-        } catch { return json({ ok: true, tags: ['support'] }); }
+        } catch (e) {
+          console.error('ai_auto_tag failed:', e instanceof Error ? e.message : e);
+          return json({ ok: true, tags: ['support'] });
+        }
       }
 
       return err('Not found', 404);
@@ -603,7 +609,7 @@ function generateWidgetScript(w: Record<string, unknown>): string {
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.ok){state.cid=d.conversation_id;state.vid=d.visitor_id;startPolling();}
-    }).catch(function(){});
+    }).catch(function(e){console.error('widget_init_chat failed:',e);});
   }
 
   function sendMessage(){
@@ -611,7 +617,7 @@ function generateWidgetScript(w: Record<string, unknown>): string {
     addMsg(text,'v');input.value='';
     fetch(API+'/v/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:state.cid,visitor_id:state.vid,content:text,visitor_name:'Visitor'})})
     .then(function(r){return r.json()})
-    .then(function(d){if(d.ai_reply)addMsg(d.ai_reply,'ai');}).catch(function(){});
+    .then(function(d){if(d.ai_reply)addMsg(d.ai_reply,'ai');}).catch(function(e){console.error('widget_send_message failed:',e);});
   }
 
   function startPolling(){
@@ -627,7 +633,7 @@ function generateWidgetScript(w: Record<string, unknown>): string {
             if(m.sender_type!=='visitor'){addMsg(m.content,m.ai_generated?'ai':'a');lastTs=m.created_at;}
           });
         }
-      }).catch(function(){});
+      }).catch(function(e){console.error('widget_poll_messages failed:',e);});
     },3000);
   }
 
