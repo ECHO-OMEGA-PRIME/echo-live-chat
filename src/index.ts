@@ -70,6 +70,7 @@ export default {
       const method = req.method;
 
     // Public endpoints — no auth
+    if (path === '/') return json({ service: 'echo-live-chat', version: '1.0.0', status: 'operational' });
     if (path === '/health') return json({ ok: true, service: 'echo-live-chat', version: '1.0.0' });
     if (path === '/status') {
       const r = await env.DB.prepare('SELECT COUNT(*) as c FROM tenants').first<{c:number}>();
