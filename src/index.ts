@@ -524,15 +524,19 @@ async function handleVisitorAPI(req: Request, env: Env, path: string, method: st
 }
 
 // ── Widget Embed Script Generator ──
+function escapeJS(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/<\//g, '<\\/');
+}
+
 function generateWidgetScript(w: Record<string, unknown>): string {
-  const color = String(w.primary_color || '#14b8a6');
+  const color = escapeJS(String(w.primary_color || '#14b8a6').replace(/[^#a-fA-F0-9]/g, ''));
   const position = String(w.position || 'bottom-right');
-  const greeting = String(w.greeting || 'Hi! How can we help?').replace(/'/g, "\\'");
-  const widgetId = String(w.id);
+  const greeting = escapeJS(String(w.greeting || 'Hi! How can we help?'));
+  const widgetId = escapeJS(String(w.id).replace(/[^a-zA-Z0-9_-]/g, ''));
   const collectEmail = w.collect_email ? 'true' : 'false';
   const collectName = w.collect_name ? 'true' : 'false';
   const branding = w.show_branding ? 'true' : 'false';
-  const autoOpen = Number(w.auto_open_delay || 0);
+  const autoOpen = Math.max(0, Math.min(60000, Number(w.auto_open_delay || 0)));
   const isRight = position.includes('right');
 
   return `(function(){
