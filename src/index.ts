@@ -30,6 +30,12 @@ function err(msg: string, status = 400): Response {
   return json({ ok: false, error: msg }, status);
 }
 
+function slog(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) {
+  const entry = { ts: new Date().toISOString(), level, worker: 'echo-live-chat', version: '1.0.0', msg, ...data };
+  if (level === 'error') console.error(JSON.stringify(entry));
+  else console.log(JSON.stringify(entry));
+}
+
 async function rateLimit(kv: KVNamespace, key: string, max: number, windowSec = 60): Promise<boolean> {
   const now = Date.now();
   const raw = await kv.get(key);
@@ -332,7 +338,7 @@ export default {
           const data = await resp.json() as Record<string, unknown>;
           return json({ ok: true, suggestion: data.answer || data.response || 'I would be happy to help you with that.' });
         } catch (e) {
-          console.error('ai_suggest_reply failed:', e instanceof Error ? e.message : e);
+          slog('warn', 'AI suggest reply failed', { error: e instanceof Error ? e.message : String(e) });
           return json({ ok: true, suggestion: 'Thank you for reaching out. Let me look into this for you.' });
         }
       }
@@ -345,7 +351,7 @@ export default {
           const match = answer.match(/\[.*?\]/s);
           return json({ ok: true, tags: match ? JSON.parse(match[0]) : ['support'] });
         } catch (e) {
-          console.error('ai_auto_tag failed:', e instanceof Error ? e.message : e);
+          slog('warn', 'AI auto-tag failed', { error: e instanceof Error ? e.message : String(e) });
           return json({ ok: true, tags: ['support'] });
         }
       }
@@ -355,7 +361,7 @@ export default {
       if ((e as Error).message?.includes('JSON')) {
         return err('Invalid JSON body', 400);
       }
-      console.error(`[echo-live-chat] ${(e as Error).message}`);
+      slog('error', 'Unhandled request error', { error: (e as Error).message, stack: (e as Error).stack });
       return err('Internal server error', 500);
     }
   },
