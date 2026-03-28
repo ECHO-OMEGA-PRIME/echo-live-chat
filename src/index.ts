@@ -1,7 +1,8 @@
 /**
- * Echo Live Chat v1.0.0 — Intercom/Drift Alternative
+ * Echo Live Chat v2.0.0 — Intercom/Drift Alternative
  * Embeddable AI-powered chat widgets for websites
  * Multi-tenant, real-time conversations, AI fallback, visitor tracking
+ * Stripe SaaS subscription billing
  */
 
 interface Env {
@@ -10,6 +11,51 @@ interface Env {
   ENGINE_RUNTIME: Fetcher;
   SHARED_BRAIN: Fetcher;
   ECHO_API_KEY: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  ANALYTICS: AnalyticsEngineDataset;
+}
+
+// ── Subscription Plans ──
+const CHAT_PLANS = [
+  { id: 'free', name: 'Free', price: 0, max_websites: 1, max_agents: 1, max_conversations_month: 100 },
+  { id: 'starter', name: 'Starter', price: 2999, max_websites: 3, max_agents: 5, max_conversations_month: 1000, display: '$29.99/mo' },
+  { id: 'business', name: 'Business', price: 9999, max_websites: 10, max_agents: 25, max_conversations_month: 10000, display: '$99.99/mo' },
+  { id: 'enterprise', name: 'Enterprise', price: 29999, max_websites: -1, max_agents: -1, max_conversations_month: -1, display: '$299.99/mo' },
+] as const;
+
+type PlanId = typeof CHAT_PLANS[number]['id'];
+
+function getPlan(id: string): typeof CHAT_PLANS[number] | undefined {
+  return CHAT_PLANS.find(p => p.id === id);
+}
+
+// ── Stripe Signature Verification (HMAC-SHA256, constant-time, replay protection) ──
+async function verifyStripeSignature(payload: string, sigHeader: string, secret: string): Promise<boolean> {
+  const parts: Record<string, string> = {};
+  for (const item of sigHeader.split(',')) {
+    const [k, v] = item.split('=');
+    if (k && v) parts[k.trim()] = v.trim();
+  }
+  const timestamp = parts['t'];
+  const sig = parts['v1'];
+  if (!timestamp || !sig) return false;
+
+  // 5-minute replay protection
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (age > 300) return false;
+
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${payload}`));
+  const expected = Array.from(new Uint8Array(signed)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  // Constant-time comparison via XOR
+  if (expected.length !== sig.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) {
+    diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 interface RLState { c: number; t: number }
@@ -31,7 +77,7 @@ function err(msg: string, status = 400): Response {
 }
 
 function slog(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) {
-  const entry = { ts: new Date().toISOString(), level, worker: 'echo-live-chat', version: '1.0.0', msg, ...data };
+  const entry = { ts: new Date().toISOString(), level, worker: 'echo-live-chat', version: '2.0.0', msg, ...data };
   if (level === 'error') console.error(JSON.stringify(entry));
   else console.log(JSON.stringify(entry));
 }
@@ -69,12 +115,22 @@ export default {
       const path = url.pathname;
       const method = req.method;
 
+    // ── Stripe Webhook — NO auth, NO rate limit ──
+    if (path === '/webhooks/stripe' && method === 'POST') {
+      return handleStripeWebhook(req, env);
+    }
+
+    // ── Public plan listing — no auth ──
+    if (path === '/plans' && method === 'GET') {
+      return json(CHAT_PLANS.map(p => ({ id: p.id, name: p.name, price: p.price, max_websites: p.max_websites, max_agents: p.max_agents, max_conversations_month: p.max_conversations_month, display: (p as Record<string, unknown>).display || 'Free' })));
+    }
+
     // Public endpoints — no auth
-    if (path === '/') return json({ service: 'echo-live-chat', version: '1.0.0', status: 'operational' });
-    if (path === '/health') return json({ ok: true, service: 'echo-live-chat', version: '1.0.0' });
+    if (path === '/') return json({ service: 'echo-live-chat', version: '2.0.0', status: 'operational', plans: CHAT_PLANS.length });
+    if (path === '/health') return json({ ok: true, service: 'echo-live-chat', version: '2.0.0', stripe: !!env.STRIPE_SECRET_KEY });
     if (path === '/status') {
       const r = await env.DB.prepare('SELECT COUNT(*) as c FROM tenants').first<{c:number}>();
-      return json({ ok: true, tenants: r?.c || 0, version: '1.0.0' });
+      return json({ ok: true, tenants: r?.c || 0, version: '2.0.0' });
     }
 
     // Widget embed script — public, CORS
@@ -355,6 +411,73 @@ export default {
           slog('warn', 'AI auto-tag failed', { error: e instanceof Error ? e.message : String(e) });
           return json({ ok: true, tags: ['support'] });
         }
+      }
+
+      // ── Stripe Subscription Upgrade ──
+      if (path === '/plans/upgrade' && method === 'POST') {
+        if (!env.STRIPE_SECRET_KEY) return err('Stripe not configured', 503);
+        const b = await req.json() as Record<string, unknown>;
+        const planId = String(b.plan_id || '');
+        const plan = getPlan(planId);
+        if (!plan || plan.price === 0) return err('Invalid plan');
+        if (!tid) return err('Tenant ID required');
+
+        const tenant = await env.DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(tid).first() as Record<string, unknown> | null;
+        if (!tenant) return err('Tenant not found', 404);
+
+        const successUrl = sanitize(String(b.success_url || 'https://echo-prime-tech.com/live-chat/billing?status=success'), 500);
+        const cancelUrl = sanitize(String(b.cancel_url || 'https://echo-prime-tech.com/live-chat/billing?status=cancelled'), 500);
+
+        // Create Stripe Checkout Session
+        const stripeResp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            'mode': 'subscription',
+            'success_url': successUrl,
+            'cancel_url': cancelUrl,
+            'client_reference_id': tid,
+            'metadata[tenant_id]': tid,
+            'metadata[plan_id]': planId,
+            'line_items[0][price_data][currency]': 'usd',
+            'line_items[0][price_data][product_data][name]': `Echo Live Chat — ${plan.name}`,
+            'line_items[0][price_data][product_data][description]': `${plan.max_websites === -1 ? 'Unlimited' : plan.max_websites} websites, ${plan.max_agents === -1 ? 'Unlimited' : plan.max_agents} agents, ${plan.max_conversations_month === -1 ? 'Unlimited' : plan.max_conversations_month} conversations/mo`,
+            'line_items[0][price_data][unit_amount]': String(plan.price),
+            'line_items[0][price_data][recurring][interval]': 'month',
+            'line_items[0][quantity]': '1',
+          }).toString(),
+        });
+        const session = await stripeResp.json() as Record<string, unknown>;
+        if (session.error) {
+          slog('error', 'Stripe checkout create failed', { error: session.error });
+          return err('Stripe error', 502);
+        }
+        slog('info', 'Stripe checkout created', { tenant_id: tid, plan: planId, session_id: session.id });
+        return json({ ok: true, checkout_url: session.url, session_id: session.id });
+      }
+
+      // ── Admin: Migrate tenants to Stripe plan columns ──
+      if (path === '/admin/migrate-stripe' && method === 'POST') {
+        const stmts = [
+          `ALTER TABLE tenants ADD COLUMN plan TEXT DEFAULT 'free'`,
+          `ALTER TABLE tenants ADD COLUMN stripe_customer_id TEXT`,
+          `ALTER TABLE tenants ADD COLUMN stripe_subscription_id TEXT`,
+          `ALTER TABLE tenants ADD COLUMN plan_updated_at TEXT`,
+          `ALTER TABLE tenants ADD COLUMN max_widgets INTEGER DEFAULT 1`,
+          `ALTER TABLE tenants ADD COLUMN max_agents INTEGER DEFAULT 1`,
+          `ALTER TABLE tenants ADD COLUMN max_conversations_month INTEGER DEFAULT 100`,
+        ];
+        const results: { sql: string; ok: boolean; error?: string }[] = [];
+        for (const sql of stmts) {
+          try {
+            await env.DB.prepare(sql).run();
+            results.push({ sql, ok: true });
+          } catch (e) {
+            results.push({ sql, ok: false, error: (e as Error).message });
+          }
+        }
+        slog('info', 'Stripe migration completed', { results });
+        return json({ ok: true, results });
       }
 
       return err('Not found', 404);
