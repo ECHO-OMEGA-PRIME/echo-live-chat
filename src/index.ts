@@ -58,9 +58,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === 'OPTIONS') return json({ ok: true });
 
-    const url = new URL(req.url);
-    const path = url.pathname;
-    const method = req.method;
+    try {
+      const url = new URL(req.url);
+      const path = url.pathname;
+      const method = req.method;
 
     // Public endpoints — no auth
     if (path === '/health') return json({ ok: true, service: 'echo-live-chat', version: '1.0.0' });
@@ -93,7 +94,6 @@ export default {
 
     const tid = getTenant(req);
 
-    try {
       // ── Tenants ──
       if (path === '/tenants' && method === 'POST') {
         const b = await req.json() as Record<string, unknown>;
@@ -346,7 +346,11 @@ export default {
 
       return err('Not found', 404);
     } catch (e: unknown) {
-      return err(String((e as Error).message || e), 500);
+      if ((e as Error).message?.includes('JSON')) {
+        return err('Invalid JSON body', 400);
+      }
+      console.error(`[echo-live-chat] ${(e as Error).message}`);
+      return err('Internal server error', 500);
     }
   },
 
