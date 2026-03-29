@@ -68,8 +68,12 @@ function uid(): string {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 }
 
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' , 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'X-XSS-Protection': '1; mode=block', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' } });
+const LC_ALLOWED_ORIGINS = ['https://echo-ept.com', 'https://echo-op.com', 'https://echo-sdk-gateway.bmcii1976.workers.dev'];
+function lcCorsOrigin(origin?: string | null): string {
+  return (origin && LC_ALLOWED_ORIGINS.includes(origin)) ? origin : '*';
+}
+function json(data: unknown, status = 200, origin?: string | null): Response {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': lcCorsOrigin(origin), 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Echo-API-Key', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'X-XSS-Protection': '1; mode=block', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' } });
 }
 
 function err(msg: string, status = 400): Response {
@@ -108,7 +112,7 @@ function authOk(req: Request, env: Env): boolean {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    if (req.method === 'OPTIONS') return json({ ok: true });
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': lcCorsOrigin(req.headers.get('Origin')), 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Echo-API-Key', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Max-Age': '86400', 'Vary': 'Origin' } });
 
     try {
       const url = new URL(req.url);
